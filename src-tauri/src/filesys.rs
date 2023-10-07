@@ -5,28 +5,35 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
     time::SystemTime,
 };
 
 use failure::Error;
-use tokio::{
-    fs::DirEntry,
-    sync::mpsc::{channel, Receiver, Sender},
-};
+use ormlite::{sqlite::Sqlite, Model, Pool};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 #[cfg(windows)]
 use winapi::um::{
     fileapi::{GetDriveTypeW, GetLogicalDriveStringsW},
     winbase::{DRIVE_FIXED, DRIVE_NO_ROOT_DIR},
 };
 
+use crate::models::paths::insert_paths;
+
 const CHANNEL_SIZE: usize = 256;
 
-#[cfg(windows)]
-pub async fn walk(sender2: Sender<PathBuf>) -> Result<(), Error> {
+pub async fn listen(pool: Pool<Sqlite>, mut rx: Receiver<Arc<PathBuf>>) -> Result<(), Error> {
+    while let Some(s) = rx.recv().await {
+        println!("PathBuf: {:?}", &s);
+        insert_paths(&pool, s.as_path()).await?;
+    }
+    Ok(())
+}
+
+pub async fn walk(sender2: Sender<Arc<PathBuf>>) -> Result<(), Error> {
     let (sender, receiver) = channel(CHANNEL_SIZE);
 
-    let sender_clone = sender.clone();
-    tokio::spawn(recursive_walk_dirs(receiver, sender_clone, sender2));
+    tokio::spawn(recursive_walk_dirs(receiver, sender.clone(), sender2));
 
     for path in get_root_dir().await {
         println!("path from root_dir: {:?}", &path);
@@ -46,7 +53,7 @@ pub async fn walk(sender2: Sender<PathBuf>) -> Result<(), Error> {
             //         / 24
             // );
 
-            sender.send(de).await?;
+            sender.send(Arc::new(de.path())).await?;
         }
     }
 
@@ -93,20 +100,21 @@ async fn get_root_dir() -> impl Iterator<Item = PathBuf> {
 }
 
 async fn recursive_walk_dirs(
-    mut rec: Receiver<DirEntry>,
-    sender: Sender<DirEntry>,
-    sender_index: Sender<PathBuf>,
+    mut rec: Receiver<Arc<PathBuf>>,
+    sender: Sender<Arc<PathBuf>>,
+    sender_index: Sender<Arc<PathBuf>>,
 ) -> Result<(), Error> {
     while let Some(de) = rec.recv().await {
         // println!("recursive: {:?} {:?}", de.path(), de.file_name());
-        if let Ok(mut dir) = tokio::fs::read_dir(de.path()).await {
+        if let Ok(mut dir) = tokio::fs::read_dir(de.as_path()).await {
             while let Some(ent) = dir.next_entry().await? {
                 if let Ok(ft) = ent.file_type().await {
                     if !ft.is_symlink() {
-                        sender_index.send(normalize_path(ent.path())).await?;
+                        let arc_ent = Arc::new(ent.path());
+                        sender_index.send(arc_ent.clone()).await?;
 
                         if ft.is_dir() {
-                            sender.send(ent).await?;
+                            sender.send(arc_ent).await?;
                         }
                     }
                 }

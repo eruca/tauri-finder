@@ -3,9 +3,13 @@ use std::{
     path::Path,
 };
 
-pub fn make_sure_file_exists(path: &Path) {
+pub fn make_sure_file_exists<P: AsRef<Path>>(path: P) {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent).unwrap();
+    }
+
     if !path.exists() {
-        create_dir_all(path).unwrap();
         File::create(path).unwrap();
     }
 }

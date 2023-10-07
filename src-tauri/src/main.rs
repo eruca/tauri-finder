@@ -5,9 +5,11 @@ use failure::Error;
 use tokio::sync::mpsc::channel;
 
 mod filesys;
-mod index;
 mod utils;
 mod finder;
+mod models;
+
+use crate::finder::Finder;
 
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
@@ -18,15 +20,11 @@ fn greet(name: &str) -> String {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     println!("hello");
-    let (sender, mut rx) = channel(256);
+    let finder = Finder::new().await?;
+    let (sender, rx) = channel(256);
 
     tokio::spawn(filesys::walk(sender));
-
-    tokio::spawn(async move {
-        while let Some(s) = rx.recv().await {
-            println!("PathBuf: {:?}", &s);
-        }
-    });
+    tokio::spawn(filesys::listen(finder.pool.clone(), rx));
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![greet])
