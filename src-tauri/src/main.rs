@@ -2,9 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use failure::Error;
+use tokio::sync::mpsc::channel;
 
-mod utils;
+mod filesys;
 mod index;
+mod utils;
+mod finder;
 
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
@@ -14,6 +17,17 @@ fn greet(name: &str) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    println!("hello");
+    let (sender, mut rx) = channel(256);
+
+    tokio::spawn(filesys::walk(sender));
+
+    tokio::spawn(async move {
+        while let Some(s) = rx.recv().await {
+            println!("PathBuf: {:?}", &s);
+        }
+    });
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![greet])
         .run(tauri::generate_context!())

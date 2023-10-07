@@ -7,34 +7,22 @@ use failure::Error;
 use tantivy::{
     collector::TopDocs,
     query::QueryParser,
-    schema::{Document, Schema, STORED, TEXT},
-    Index, IndexWriter, ReloadPolicy,
+    schema::{Document, Field, Schema, STORED, TEXT},
+    Index, IndexReader, IndexWriter, ReloadPolicy,
 };
+use tantivy_jieba::JiebaTokenizer;
 use tokio::{fs::DirEntry, sync::mpsc::Receiver};
 
-struct TantivyIndex {}
+use crate::finder::Finder;
 
-impl TantivyIndex {
-    async fn process(&self, writer: IndexWriter, mut receiver: &mut Receiver<PathBuf>) {
-        for path in receiver.recv().await {}
-    }
+pub struct TantivyIndexReader {
+    pub reader: IndexReader,
+    pub query_parser: QueryParser,
+    pub tokenizer: JiebaTokenizer,
 }
 
-#[cfg(windows)]
-pub fn normalize_path(path: &Path) -> Cow<Path> {
-    match path.to_str() {
-        Some(p) => {
-            if p.contains("\\") {
-                Cow::Owned(p.replace("\\", "/").into())
-            } else {
-                Cow::Borrowed(path)
-            }
-        }
-        None => panic!("{:?} not valid utf-8 path", path),
-    }
-}
-
-#[cfg(unix)]
-pub fn normalize_path(path: &Path) -> Cow<Path> {
-    Cow::Borrowed(path)
+struct TantivyIndexWriter {
+    pub writer: IndexWriter,
+    pub path_field: Field,
+    pub tokenizer: JiebaTokenizer,
 }
