@@ -20,6 +20,8 @@ tokio = { version = "1", features = ["full"] }
 failure = "0.1"
 ormlite = { version = "0.17", features = ["sqlite", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
+walkdir = "2"
+dirs = "5"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["winnt"] }

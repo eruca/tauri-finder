@@ -10,7 +10,7 @@ use std::{
 };
 
 use failure::Error;
-use ormlite::{sqlite::Sqlite, Model, Pool};
+use ormlite::{sqlite::Sqlite, Pool};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 #[cfg(windows)]
 use winapi::um::{
@@ -18,11 +18,11 @@ use winapi::um::{
     winbase::{DRIVE_FIXED, DRIVE_NO_ROOT_DIR},
 };
 
-use crate::models::paths::insert_paths;
+use crate::{finder::Setting, models::paths::insert_paths};
 
-const CHANNEL_SIZE: usize = 256;
+// const CHANNEL_SIZE: usize = 256;
 
-pub async fn listen(pool: Pool<Sqlite>, mut rx: Receiver<Arc<PathBuf>>) -> Result<(), Error> {
+pub async fn listen(pool: Pool<Sqlite>, mut rx: Receiver<PathBuf>) -> Result<(), Error> {
     while let Some(s) = rx.recv().await {
         println!("PathBuf: {:?}", &s);
         insert_paths(&pool, s.as_path()).await?;
@@ -30,36 +30,43 @@ pub async fn listen(pool: Pool<Sqlite>, mut rx: Receiver<Arc<PathBuf>>) -> Resul
     Ok(())
 }
 
-pub async fn walk(sender2: Sender<Arc<PathBuf>>) -> Result<(), Error> {
-    let (sender, receiver) = channel(CHANNEL_SIZE);
-
-    tokio::spawn(recursive_walk_dirs(receiver, sender.clone(), sender2));
-
-    for path in get_root_dir().await {
-        println!("path from root_dir: {:?}", &path);
-        let mut dir = tokio::fs::read_dir(path).await?;
-        while let Some(de) = dir.next_entry().await? {
-            // let meta = de.metadata().await?;
-            // let modifyed_at = meta.modified()?;
-            // println!(
-            //     "{:?} meta:{:?} {:?}",
-            //     de.path(),
-            //     meta,
-            //     SystemTime::now()
-            //         .duration_since(modifyed_at)
-            //         .unwrap()
-            //         .as_secs()
-            //         / 3600
-            //         / 24
-            // );
-
-            sender.send(Arc::new(de.path())).await?;
+pub async fn walk(sx: Sender<PathBuf>, setting: Arc<Setting>) -> Result<(), Error> {
+    for path in dirs::home_dir().into_iter().chain(get_root_dir().await) {
+        for entry in walkdir::WalkDir::new(path.as_path())
+            .into_iter()
+            .filter_map(|e| match e {
+                Ok(de) => match de.path().to_str() {
+                    Some(p) => {
+                        if setting.excludes.iter().any(|s| p.contains(s)) {
+                            None
+                        } else {
+                            Some(de)
+                        }
+                    }
+                    None => None,
+                },
+                _ => None,
+            })
+        {
+            let path = entry.path().to_str().expect("entry.path to_str failed");
+            if !setting.excludes.iter().any(|s| path.contains(s)) {
+                if !entry.file_type().is_symlink() {
+                    sx.send(entry.into_path()).await?;
+                }
+            }
         }
     }
-
-    println!("fininsh walk");
     Ok(())
 }
+
+// pub async fn walk(sender2: Sender<Arc<PathBuf>>) -> Result<(), Error> {
+//     let (sender, receiver) = channel(CHANNEL_SIZE);
+
+//     tokio::spawn(recursive_walk_dirs(receiver, sender.clone(), sender2));
+
+//     println!("fininsh walk");
+//     Ok(())
+// }
 
 #[cfg(windows)]
 async fn get_windows_hard_disk_drivers() -> Vec<PathBuf> {
@@ -99,32 +106,29 @@ async fn get_root_dir() -> impl Iterator<Item = PathBuf> {
     return get_windows_hard_disk_drivers().await.into_iter();
 }
 
-async fn recursive_walk_dirs(
-    mut rec: Receiver<Arc<PathBuf>>,
-    sender: Sender<Arc<PathBuf>>,
-    sender_index: Sender<Arc<PathBuf>>,
-) -> Result<(), Error> {
-    while let Some(de) = rec.recv().await {
-        // println!("recursive: {:?} {:?}", de.path(), de.file_name());
-        if let Ok(mut dir) = tokio::fs::read_dir(de.as_path()).await {
-            while let Some(ent) = dir.next_entry().await? {
-                if let Ok(ft) = ent.file_type().await {
-                    if !ft.is_symlink() {
-                        let arc_ent = Arc::new(ent.path());
-                        sender_index.send(arc_ent.clone()).await?;
+// async fn recursive_walk_dirs(
+//     mut rec: Receiver<Arc<PathBuf>>,
+//     sender_index: Sender<Arc<PathBuf>>,
+// ) -> Result<(), Error> {
+//     while let Some(de) = rec.recv().await {
+//         // println!("recursive: {:?} {:?}", de.path(), de.file_name());
+//         if let Ok(mut dir) = tokio::fs::read_dir(de.as_path()).await {
+//             while let Some(ent) = dir.next_entry().await? {
+//                 if let Ok(ft) = ent.file_type().await {
+//                     if !ft.is_symlink() {
+//                         let arc_ent = Arc::new(ent.path());
+//                         sender_index.send(arc_ent.clone()).await?;
+//                     }
+//                 }
+//             }
+//         } else {
+//             println!("not {:?}", de.as_path());
+//         }
+//     }
 
-                        if ft.is_dir() {
-                            sender.send(arc_ent).await?;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    println!("finish recursive walk dirs");
-    Ok(())
-}
+//     println!("finish recursive walk dirs");
+//     Ok(())
+// }
 
 #[cfg(windows)]
 pub fn normalize_path(path: PathBuf) -> PathBuf {
@@ -137,6 +141,20 @@ pub fn normalize_path(path: PathBuf) -> PathBuf {
 }
 
 #[cfg(unix)]
-pub fn normalize_path(path: &str) -> Cow<str> {
-    Cow::Borrowed(path)
+pub fn normalize_path(path: PathBuf) -> PathBuf {
+    path
+}
+
+mod tests {
+    use super::get_root_dir;
+
+    #[test]
+    fn it_works() {
+        let mut iter = dirs::home_dir()
+            .into_iter()
+            .chain(Some("/".into()).into_iter());
+
+        assert_eq!(iter.next(), Some("/Users/nick".into()));
+        assert_eq!(iter.next(), Some("/".into()));
+    }
 }
