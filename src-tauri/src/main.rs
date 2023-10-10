@@ -21,12 +21,12 @@ fn greet(name: &str) -> String {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     println!("hello");
-    let finder = Finder::new().await?;
-    init_table(&finder.pool).await?;
-    let (sender, rx) = channel(256);
+    // let finder = Finder::new().await?;
+    // init_table(&finder.pool).await?;
+    // let (sender, rx) = channel(256);
 
-    tokio::spawn(filesys::walk(sender, finder.setting.clone()));
-    tokio::spawn(filesys::listen(finder.pool.clone(), rx));
+    // tokio::spawn(filesys::walk(sender, finder.setting.clone()));
+    // tokio::spawn(filesys::listen(finder.pool.clone(), rx));
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![greet])
